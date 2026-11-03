@@ -76,6 +76,13 @@ jobs:
           $installer = $installers[0]
           $blockmap = "$($installer.FullName).blockmap"
           if (!(Test-Path $blockmap) -or !(Test-Path release/latest.yml)) { throw 'Windows update metadata is missing.' }
+          if ($installer.Name -notmatch '^[A-Za-z0-9._-]+$') { throw 'Installer name must be safe for GitHub release uploads.' }
+          $feed = Get-Content release/latest.yml -Raw
+          $feedPath = [regex]::Match($feed, '(?m)^path: (.+)\r?$').Groups[1].Value.Trim()
+          if ($feedPath -cne $installer.Name) { throw 'Updater path does not match the installer filename.' }
+          $feedHash = [regex]::Match($feed, '(?m)^sha512: (.+)\r?$').Groups[1].Value.Trim()
+          $installerHash = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash $installer.FullName -Algorithm SHA512).Hash))
+          if ($feedHash -cne $installerHash) { throw 'Updater checksum does not match the installer.' }
           $signature = Get-AuthenticodeSignature $installer.FullName
           if ($env:SIGNING_EXPECTED -eq 'true' -and $signature.Status -ne 'Valid') { throw "Installer signature is invalid: $($signature.Status)" }
           if ($signature.Status -notin @('Valid', 'NotSigned')) { throw "Unexpected installer signature status: $($signature.Status)" }
@@ -121,6 +128,20 @@ jobs:
           gh release edit $env:RELEASE_TAG --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the Windows release.' }
           gh release view $env:RELEASE_TAG --json url --jq .url >> $env:GITHUB_STEP_SUMMARY
+      - name: Remove the superseded unpublished initial draft
+        if: success() && env.RELEASE_TAG == 'v0.1.1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $previous = gh release view v0.1.0 --json isDraft,body 2>$null
+          if ($LASTEXITCODE -eq 0 -and ($previous | ConvertFrom-Json).isDraft) {
+            $draft = $previous | ConvertFrom-Json
+            if ($draft.body.Contains('The first Windows release of **Reverse Engineer**')) {
+              gh release delete v0.1.0 --yes
+              if ($LASTEXITCODE -ne 0) { throw 'Could not remove the superseded draft.' }
+            }
+          }
+          exit 0
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

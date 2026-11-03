@@ -1,6 +1,6 @@
 {
   "name": "reverse-engineer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "An evidence-led AI research and reverse engineering desktop workspace",
@@ -49,17 +49,45 @@
     "vite": "8.3.5",
     "vitest": "^5.0.5"
   },
-  "overrides": { "katex": "$katex" },
+  "overrides": {
+    "katex": "$katex"
+  },
   "build": {
     "appId": "dev.reverseengineer.desktop",
     "productName": "Reverse Engineer",
     "icon": "build/icon.png",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "dist-electron/**/*", "package.json"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
     "asar": true,
-    "publish": [{ "provider": "github", "owner": "AaronGrace978", "repo": "Reverse-Engineer" }],
-    "win": { "target": "nsis" },
-    "mac": { "target": ["dmg", "zip"], "category": "public.app-category.developer-tools", "hardenedRuntime": true },
-    "linux": { "target": "AppImage", "category": "Development", "syncDesktopName": true }
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AaronGrace978",
+        "repo": "Reverse-Engineer"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "Reverse-Engineer-Setup-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "syncDesktopName": true
+    }
   }
 }

@@ -1,4 +1,5 @@
 import { PROVIDERS } from './shared/providers'
+import packageInfo from '../package.json'
 import type { DesktopApi, Workspace } from './shared/types'
 
 // Browser mode is an explicitly labeled UI preview. Credentials and model calls
@@ -8,7 +9,7 @@ try { const saved = localStorage.getItem('re-preview-workspace'); if (saved) wor
 const save = () => { localStorage.setItem('re-preview-workspace', JSON.stringify(workspace)); return structuredClone(workspace) }
 async function desktopRequired(): Promise<never> { throw new Error('Launch the Electron app with npm run dev to use native files, secure credentials, model APIs, and updates.') }
 const preview: DesktopApi = {
-  initialize: async () => ({ desktop: false, version: '0.1.0', electronVersion: 'Desktop app required', secureStorage: false, providers: PROVIDERS.map(p => ({ id: p.id, configured: false, baseUrl: p.baseUrl, keyStorage: 'none' })), workspace: structuredClone(workspace) }),
+  initialize: async () => ({ desktop: false, version: packageInfo.version, electronVersion: 'Desktop app required', secureStorage: false, providers: PROVIDERS.map(p => ({ id: p.id, configured: false, baseUrl: p.baseUrl, keyStorage: 'none' })), workspace: structuredClone(workspace) }),
   createInvestigation: async mode => { workspace.investigations.unshift({ id: crypto.randomUUID(), mode, title: 'Untitled investigation', createdAt: new Date().toISOString(), messages: [], attachments: [] }); return save() },
   deleteInvestigation: async id => { workspace.investigations = workspace.investigations.filter(i => i.id !== id); return save() },
   renameInvestigation: async (id, title) => { const item = workspace.investigations.find(i => i.id === id); if (item) item.title = title; return save() },

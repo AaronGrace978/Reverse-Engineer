@@ -7,6 +7,7 @@ The first Windows release of **Reverse Engineer**, an Electron desktop workspace
 - An independent numeric calculator, optional draft/critique/refine workflow, reviewed notebook memory, and model-drafted lessons.
 - A repeatable evaluation harness, local investigation history, Markdown exports, native clipboard support, and application update checks.
 - Updated TypeScript, Vitest, PDF extraction, icon, and CI dependencies.
+- GitHub-safe Windows installer filenames, with updater path and SHA-512 integrity checks before publication.
 
 ### Install
 
