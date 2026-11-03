@@ -1,0 +1,50 @@
+name: Release desktop application
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK || matrix.os == 'windows-latest' && secrets.WIN_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_KEY_PASSWORD || matrix.os == 'windows-latest' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate release version and signing prerequisites
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import pkg from './package.json' with { type: 'json' };
+          if (process.env.GITHUB_REF_NAME !== `v${pkg.version}`) throw new Error('Tag must match package.json version.');
+          if (process.platform !== 'linux' && (!process.env.CSC_LINK || !process.env.CSC_KEY_PASSWORD)) throw new Error('Configure platform code-signing secrets before releasing.');
+          if (process.platform === 'darwin' && ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'].some(name => !process.env[name])) throw new Error('Configure Apple notarization secrets before releasing.');
+          JS
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Package, sign, and upload draft release artifacts
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            npx electron-builder --publish always --config.mac.notarize=true
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            CSC_LINK= CSC_KEY_PASSWORD= npx electron-builder --publish always
+          else
+            npx electron-builder --publish always
+          fi
+        env:
+          EP_DRAFT: 'true'
