@@ -24,8 +24,8 @@ describe('local credential and workspace persistence', () => {
     expect(readFileSync(join(path, 'settings.json'), 'utf8')).not.toContain('my-private-key')
     expect(new Store(path).connection('ollama-cloud').key).toBe('my-private-key')
   })
-  it('keeps keys in memory when Linux falls back to basic_text', () => {
-    storage.backend = 'basic_text'
+  it('keeps keys in memory when OS encryption is unavailable', () => {
+    storage.available = false
     const path = directory()
     const store = new Store(path)
     expect(store.secureStorage).toBe(false)
@@ -33,6 +33,12 @@ describe('local credential and workspace persistence', () => {
     expect(store.connection('anthropic').key).toBe('session-private-key')
     expect(readFileSync(join(path, 'settings.json'), 'utf8')).not.toContain('session-private-key')
     expect(() => new Store(path).connection('anthropic')).toThrow('Connect')
+  })
+  it.runIf(process.platform === 'linux')('refuses Linux basic_text even when Electron reports encryption available', () => {
+    storage.backend = 'basic_text'
+    const store = new Store(directory())
+    expect(store.secureStorage).toBe(false)
+    expect(store.setProvider('anthropic', 'session-only').find(p => p.id === 'anthropic')?.keyStorage).toBe('session')
   })
   it('requires a new key when changing a custom endpoint', () => {
     const store = new Store(directory())

@@ -19,6 +19,7 @@
     "test:desktop": "node scripts/smoke-desktop.mjs",
     "postinstall": "install-electron",
     "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:dir": "npm run build && electron-builder --dir"
   },
   "dependencies": {

@@ -75,6 +75,7 @@ npm run test:e2e         # Browser workflow tests; CHROMIUM_PATH can select an e
 npm run test:desktop     # Real Electron IPC and persistence, with a local fixture API
 npm run dist:dir         # Unpacked desktop application for this OS
 npm run dist             # Installer for this OS in release/
+npm run dist:win         # Windows x64 NSIS installer (use a Windows build host)
 ```
 
 To run the same integration checks against an unpacked Linux build: `CI=1 REVERSE_ENGINEER_EXECUTABLE=release/linux-unpacked/reverse-engineer npm run test:desktop`. The checked-in app icon comes from `build/icon.svg`; regenerate its PNG with `node scripts/render-icon.mjs` after installing Playwright Chromium (`CHROMIUM_PATH` can select an existing browser).
@@ -87,13 +88,13 @@ Installed builds check GitHub Releases at startup and every six hours, download 
 
 An Electron app bundles its runtime. Upgrading Electron requires rebuilding, testing, signing, and distributing the application; swapping the runtime under a running app is unsupported. Dependabot checks npm daily and opens Electron/runtime update PRs. CI validates updates before maintainers release them. These PRs do **not** auto-merge or publish untested runtime upgrades.
 
-The release workflow builds NSIS for Windows, DMG/ZIP for macOS, and AppImage for Linux, uploading artifacts and update metadata to a **draft GitHub Release** in `AaronGrace978/Reverse-Engineer`. To activate distribution:
+The release workflow publishes **Windows x64 only** in `AaronGrace978/Reverse-Engineer`. It builds the NSIS installer on a Windows runner, runs the native smoke suite both before and after packaging, verifies the installer signature status, and uploads the installer, blockmap, `latest.yml`, and SHA-256 checksums. It publishes the draft only after confirming that these four Windows assets are present. Local Linux/macOS packaging configuration remains available for development; those platforms are not released by this workflow.
 
-1. Set repository signing secrets: `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`; and Apple notarization secrets `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`. Certificate links may be base64 signing certificates, as supported by electron-builder. Keep values in GitHub Secrets.
-2. Bump `package.json` and the lockfile version, run checks, and push a matching `vX.Y.Z` tag. CI refuses unsigned Windows/macOS release jobs or mismatched versions.
-3. Review the generated draft, test signed installers and a real upgrade from a previous version, then publish the release. Keep generated `latest*.yml`, blockmaps, and installer artifacts together. Linux auto-updates require running the AppImage distribution.
+1. For Authenticode signing, configure both repository secrets `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`. Certificate links may be base64 signing certificates, as supported by electron-builder. Keep values in GitHub Secrets. Partial signing configuration or an invalid configured signature blocks publication. If neither secret is configured, the workflow can publish an **explicitly labeled unsigned preview**; it does not claim a signed installer or disable updater signature verification.
+2. Set `package.json` and the lockfile to the release version, run checks, then push a matching `vX.Y.Z` tag. The initial release uses `v0.1.0`. This starts the Windows-only build and publication workflow. A manual workflow dispatch can retry an existing tag. Already published versions cannot be silently replaced.
+3. The published notes report whether the resulting installer has a valid signature or is unsigned. Keep `latest.yml`, its referenced installer, blockmap, and checksum file together. Test a real installed-version upgrade when a second version exists.
 
-Release signing, notarization, publication, and an actual installed-build upgrade need release credentials and have not been verified in this cloud task.
+The GitHub Actions token supplies release publication credentials. The workflow checks signing status on the actual Windows installer; a configured certificate is required to produce a signed release. A two-version updater migration still needs separate validation.
 
 ## Source map
 

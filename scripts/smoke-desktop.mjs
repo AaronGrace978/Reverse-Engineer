@@ -126,5 +126,5 @@ try {
   await app?.close()
   server.closeAllConnections()
   await new Promise(done => server.close(done))
-  await rm(directory, { recursive: true, force: true })
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 }

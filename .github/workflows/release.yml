@@ -1,50 +1,128 @@
-name: Release desktop application
+name: Release Windows application
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example v0.1.0)
+        required: true
+        type: string
+
 permissions:
   contents: write
+concurrency:
+  group: windows-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
+    timeout-minutes: 30
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK || matrix.os == 'windows-latest' && secrets.WIN_CSC_LINK || '' }}
-      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_KEY_PASSWORD || matrix.os == 'windows-latest' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        shell: pwsh
     steps:
+      - name: Validate requested tag
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw 'Use a semantic version tag such as v0.1.0.'
+          }
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - name: Validate release version and signing prerequisites
-        shell: bash
+      - name: Validate version and signing configuration
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
-          node --input-type=module <<'JS'
-          import pkg from './package.json' with { type: 'json' };
-          if (process.env.GITHUB_REF_NAME !== `v${pkg.version}`) throw new Error('Tag must match package.json version.');
-          if (process.platform !== 'linux' && (!process.env.CSC_LINK || !process.env.CSC_KEY_PASSWORD)) throw new Error('Configure platform code-signing secrets before releasing.');
-          if (process.platform === 'darwin' && ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'].some(name => !process.env[name])) throw new Error('Configure Apple notarization secrets before releasing.');
-          JS
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Tag must match package.json version.' }
+          $tagCommit = git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag does not exist.' }
+          if ($tagCommit -ne (git rev-parse HEAD)) { throw 'Checkout does not match the release tag.' }
+          if ([bool]$env:CSC_LINK -xor [bool]$env:CSC_KEY_PASSWORD) {
+            throw 'Provide both Windows signing secrets, or neither for an explicitly unsigned preview.'
+          }
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Package, sign, and upload draft release artifacts
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            npx electron-builder --publish always --config.mac.notarize=true
-          elif [ "$RUNNER_OS" = "Linux" ]; then
-            CSC_LINK= CSC_KEY_PASSWORD= npx electron-builder --publish always
-          else
-            npx electron-builder --publish always
-          fi
+      - name: Test native application on Windows
+        run: npm run test:desktop
+      - name: Package Windows x64 NSIS installer
         env:
-          EP_DRAFT: 'true'
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Test packaged Windows application
+        run: |
+          $env:REVERSE_ENGINEER_EXECUTABLE = (Resolve-Path 'release/win-unpacked/Reverse Engineer.exe').Path
+          npm run test:desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows application failed its smoke test.' }
+      - name: Verify installer and prepare release assets
+        id: assets
+        env:
+          SIGNING_EXPECTED: ${{ secrets.WIN_CSC_LINK != '' }}
+        run: |
+          $installers = @(Get-ChildItem release -File -Filter '*.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer.' }
+          $installer = $installers[0]
+          $blockmap = "$($installer.FullName).blockmap"
+          if (!(Test-Path $blockmap) -or !(Test-Path release/latest.yml)) { throw 'Windows update metadata is missing.' }
+          $signature = Get-AuthenticodeSignature $installer.FullName
+          if ($env:SIGNING_EXPECTED -eq 'true' -and $signature.Status -ne 'Valid') { throw "Installer signature is invalid: $($signature.Status)" }
+          if ($signature.Status -notin @('Valid', 'NotSigned')) { throw "Unexpected installer signature status: $($signature.Status)" }
+          $assets = @($installer.FullName, $blockmap, (Resolve-Path release/latest.yml).Path)
+          $checksumLines = $assets | ForEach-Object {
+            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path $_ -Leaf)"
+          }
+          $checksumLines | Set-Content release/SHA256SUMS -Encoding utf8NoBOM
+          $notes = Get-Content docs/releases/windows.md -Raw
+          if ($signature.Status -eq 'Valid') {
+            $notes += "`n`nThe Windows installer has a valid Authenticode signature.`n"
+          } else {
+            $notes += "`n`n**Unsigned preview:** no Windows signing certificate was configured. Windows SmartScreen may warn about this installer. Verify the published SHA256SUMS before running it.`n"
+          }
+          $notes | Set-Content release/release-notes.md -Encoding utf8NoBOM
+          "installer=$($installer.Name)" >> $env:GITHUB_OUTPUT
+      - name: Upload verified Windows assets to a draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $existing = gh release view $env:RELEASE_TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (!(($existing | ConvertFrom-Json).isDraft)) { throw 'This release is already published. Use a new version.' }
+          } else {
+            gh release create $env:RELEASE_TAG --verify-tag --draft --title "Reverse Engineer $env:RELEASE_TAG — Windows" --notes-file release/release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the release draft.' }
+          }
+          $assets = @("release/${{ steps.assets.outputs.installer }}", "release/${{ steps.assets.outputs.installer }}.blockmap", 'release/latest.yml', 'release/SHA256SUMS')
+          gh release upload $env:RELEASE_TAG @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload Windows release assets.' }
+          gh release edit $env:RELEASE_TAG --notes-file release/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update release notes.' }
+      - name: Publish Windows-only release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $release = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify uploaded assets.' }
+          $expected = @('${{ steps.assets.outputs.installer }}', '${{ steps.assets.outputs.installer }}.blockmap', 'latest.yml', 'SHA256SUMS') | Sort-Object
+          $actual = @($release.assets | ForEach-Object { $_.name }) | Sort-Object
+          if (Compare-Object $expected $actual) { throw 'Release must contain exactly the Windows installer, blockmap, update feed, and checksums.' }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the Windows release.' }
+          gh release view $env:RELEASE_TAG --json url --jq .url >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-test-evidence
+          path: test-results/
